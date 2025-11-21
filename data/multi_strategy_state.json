@@ -1,0 +1,69 @@
+{
+  "symbols": [
+    "ETH/USDT",
+    "SOL/USDT",
+    "SUI/USDT"
+  ],
+  "symbol_states": {
+    "ETH/USDT": {
+      "investment_count": 1,
+      "last_investment_date": "2025-11-21",
+      "last_profit_taking_date": null,
+      "total_invested": 44.745945,
+      "total_shares": 0.0163,
+      "total_sell_amount": 0.0,
+      "investment_history": [
+        {
+          "date": "2025-11-21",
+          "price": 2745.15,
+          "ma120": 4043.8446666666664,
+          "deviation": -32.11534501737373,
+          "multiplier": 1.6,
+          "amount": 44.745945,
+          "shares": 0.0163
+        }
+      ],
+      "profit_history": []
+    },
+    "SOL/USDT": {
+      "investment_count": 1,
+      "last_investment_date": "2025-11-21",
+      "last_profit_taking_date": null,
+      "total_invested": 44.80236000000001,
+      "total_shares": 0.3492,
+      "total_sell_amount": 0.0,
+      "investment_history": [
+        {
+          "date": "2025-11-21",
+          "price": 128.3,
+          "ma120": 192.48841666666667,
+          "deviation": -33.34663860725818,
+          "multiplier": 1.6,
+          "amount": 44.80236000000001,
+          "shares": 0.3492
+        }
+      ],
+      "profit_history": []
+    },
+    "SUI/USDT": {
+      "investment_count": 1,
+      "last_investment_date": "2025-11-21",
+      "last_profit_taking_date": null,
+      "total_invested": 22.39994664,
+      "total_shares": 16.1058,
+      "total_sell_amount": 0.0,
+      "investment_history": [
+        {
+          "date": "2025-11-21",
+          "price": 1.3908,
+          "ma120": 3.0934858333333333,
+          "deviation": -55.04100956229798,
+          "multiplier": 1.6,
+          "amount": 22.39994664,
+          "shares": 16.1058
+        }
+      ],
+      "profit_history": []
+    }
+  }
+}

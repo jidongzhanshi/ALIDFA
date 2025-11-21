@@ -4,6 +4,7 @@ import schedule
 import logging
 import ccxt
 import pandas as pd
+import requests
 from datetime import datetime
 from dotenv import load_dotenv
 import json
@@ -36,14 +37,20 @@ class DFALiveTrading:
         self.logger = logging.getLogger('DFA_Live')
         
     def setup_exchange(self):
-        """设置币安主网连接 - 阿里云直接访问"""
+        """设置币安连接 - 修复代理配置"""
         max_retries = 3
         for attempt in range(max_retries):
             try:
+                # 代理配置
+                proxy_config = None
+                if os.getenv('USE_PROXY', 'false').lower() == 'true':
+                    proxy_config = os.getenv('PROXY_URL', 'http://10.48.175.246:7897')
+                    self.logger.info(f"🔌 使用代理: {proxy_config}")
+                
                 exchange_config = {
-                    'apiKey': os.getenv('BINANCE_API_KEY'),
-                    'secret': os.getenv('BINANCE_API_SECRET'),
-                    'sandbox': False,
+                    'apiKey': os.getenv('BINANCE_API_KEY', 'dry_run_test_key'),
+                    'secret': os.getenv('BINANCE_API_SECRET', 'dry_run_test_secret'),
+                    'sandbox': os.getenv('SANDBOX_MODE', 'false').lower() == 'true',
                     'enableRateLimit': True,
                     'timeout': 30000,
                     'options': {
@@ -52,16 +59,29 @@ class DFALiveTrading:
                     },
                 }
                 
-                self.exchange = ccxt.binance(exchange_config)
+                # 修复：为CCXT配置代理会话
+                if proxy_config:
+                    session = requests.Session()
+                    session.proxies = {
+                        'http': proxy_config,
+                        'https': proxy_config,
+                    }
+                    exchange_config['session'] = session
+                    self.logger.info("✅ 已配置代理会话")
                 
+                self.exchange = ccxt.binance(exchange_config)
+            
                 # 测试连接
                 time_data = self.exchange.fetch_time()
                 server_time = datetime.fromtimestamp(time_data / 1000).strftime('%Y-%m-%d %H:%M:%S')
-                self.logger.info(f"✅ 币安主网连接成功（第{attempt+1}次尝试）")
+                self.logger.info(f"✅ 币安连接成功（第{attempt+1}次尝试）")
                 self.logger.info(f"⏰ 服务器时间: {server_time}")
-                self.logger.info("🌐 使用阿里云直接网络连接")
+                if proxy_config:
+                    self.logger.info("🔌 通过代理连接")
+                else:
+                    self.logger.info("🌐 直接连接")
                 return
-                
+            
             except Exception as e:
                 self.logger.warning(f"⚠️ 第{attempt+1}次连接失败: {e}")
                 if attempt < max_retries - 1:
@@ -71,47 +91,40 @@ class DFALiveTrading:
                 else:
                     self.logger.error("❌ 所有连接尝试都失败")
                     raise
-    
+
     def load_strategy_state(self):
-        """加载策略状态"""
+        """加载多币种策略状态"""
         try:
-            # 确保data目录存在
             os.makedirs('data', exist_ok=True)
             
-            state_file = 'data/strategy_state.json'
+            state_file = 'data/multi_strategy_state.json'
             if os.path.exists(state_file):
                 with open(state_file, 'r', encoding='utf-8') as f:
                     state = json.load(f)
                 
-                self.strategy = DFAStrategyLogic(
-                    base_cash=float(os.getenv('BASE_CASH', 70)),
-                    investment_interval=int(os.getenv('INVESTMENT_INTERVAL', 14)),
-                    target_return=float(os.getenv('TARGET_RETURN', 75))
-                )
+                from multi_asset_strategy import MultiAssetDFAStrategy
+                self.strategy = MultiAssetDFAStrategy()
                 self.strategy.from_dict(state)
-                self.logger.info("✅ 策略状态加载成功")
+                self.logger.info("✅ 多币种策略状态加载成功")
             else:
-                self.strategy = DFAStrategyLogic(
-                    base_cash=float(os.getenv('BASE_CASH', 70)),
-                    investment_interval=int(os.getenv('INVESTMENT_INTERVAL', 14)),
-                    target_return=float(os.getenv('TARGET_RETURN', 75))
-                )
-                self.logger.info("📝 初始化新策略")
+                from multi_asset_strategy import MultiAssetDFAStrategy
+                self.strategy = MultiAssetDFAStrategy()
+                self.logger.info("📝 初始化新多币种策略")
                 
         except Exception as e:
             self.logger.error(f"❌ 加载策略状态失败: {e}")
             raise
-    
+
     def save_strategy_state(self):
-        """保存策略状态"""
+        """保存多币种策略状态"""
         try:
-            with open('data/strategy_state.json', 'w', encoding='utf-8') as f:
+            with open('data/multi_strategy_state.json', 'w', encoding='utf-8') as f:
                 json.dump(self.strategy.to_dict(), f, indent=2, ensure_ascii=False)
-            self.logger.debug("💾 策略状态已保存")
+            self.logger.debug("💾 多币种策略状态已保存")
         except Exception as e:
             self.logger.error(f"❌ 保存策略状态失败: {e}")
     
-    def get_current_price(self, symbol='SUI/USDT'):
+    def get_current_price(self, symbol='SOL/USDT'):
         """获取当前价格"""
         try:
             ticker = self.exchange.fetch_ticker(symbol)
@@ -122,7 +135,7 @@ class DFALiveTrading:
             self.logger.error(f"❌ 获取价格失败: {e}")
             return None
     
-    def calculate_ma120(self, symbol='SUI/USDT'):
+    def calculate_ma120(self, symbol='SOL/USDT'):
         """计算MA120指标"""
         try:
             ohlcv = self.exchange.fetch_ohlcv(symbol, '1d', limit=120)
@@ -151,6 +164,12 @@ class DFALiveTrading:
     def get_account_balance(self):
         """获取账户余额"""
         try:
+            # Dry Run模式下返回模拟余额
+            dry_run = os.getenv('DRY_RUN', 'true').lower() == 'true'
+            if dry_run:
+                self.logger.info("💡 模拟账户余额: 1000.00 USDT")
+                return 1000.0
+            
             balance = self.exchange.fetch_balance()
             usdt_balance = balance['total'].get('USDT', 0)
             free_balance = balance['free'].get('USDT', 0)
@@ -203,133 +222,174 @@ class DFALiveTrading:
             return None
     
     def run_strategy_check(self):
-        """执行策略检查"""
+        """执行多币种策略检查"""
         self.logger.info("=" * 60)
-        self.logger.info("🔍 开始策略检查")
+        self.logger.info("🔍 开始多币种策略检查")
         self.logger.info("=" * 60)
-        
-        current_price = self.get_current_price()
-        ma120 = self.calculate_ma120()
-        
-        if current_price is None or ma120 is None:
-            self.logger.error("❌ 获取市场数据失败，跳过本次检查")
-            return
         
         current_date = datetime.now().date()
+        current_prices = {}
+        ma120_values = {}
         
-        deviation = (current_price - ma120) / ma120 * 100
-        self.logger.info(f"📊 价格偏离MA120: {deviation:.1f}%")
-        
-        # 1. 检查减仓条件
-        self.logger.info("📉 检查减仓条件...")
-        profit_result = self.strategy.execute_profit_taking(current_price, current_date)
-        
-        if profit_result['action'] == 'sell':
-            self.logger.info(f"🎯 触发减仓条件!")
-            self.logger.info(f"   卖出份额: {profit_result['size']:.4f}")
+        # 为每个币种获取市场数据
+        for symbol in self.strategy.symbols:
+            self.logger.info(f"\n📊 处理 {symbol}...")
             
-            order = self.execute_sell_order(
-                os.getenv('SYMBOL'), 
-                profit_result['size'], 
-                profit_result['price']
-            )
+            price = self.get_current_price(symbol)
+            ma120 = self.calculate_ma120(symbol)
             
-            if order:
-                self.logger.info("✅ 减仓操作完成")
-        else:
-            self.logger.info(f"⏳ 减仓检查: {profit_result['reason']}")
-        
-        # 2. 检查投资条件
-        self.logger.info("💰 检查投资条件...")
-        if self.strategy.should_invest_today(current_date):
-            available_cash = self.get_account_balance()
-            investment_result = self.strategy.execute_investment(
-                current_price, ma120, current_date, available_cash
-            )
-            
-            if investment_result['action'] == 'buy':
-                self.logger.info(f"🎯 触发投资条件!")
-                self.logger.info(f"   投资金额: ${investment_result['amount']:.2f}")
-                self.logger.info(f"   偏离程度: {investment_result['deviation']:.1f}%")
+            if price is not None and ma120 is not None:
+                current_prices[symbol] = price
+                ma120_values[symbol] = ma120
                 
-                order = self.execute_buy_order(
-                    os.getenv('SYMBOL'),
-                    investment_result['size'],
-                    investment_result['price']
+                deviation = (price - ma120) / ma120 * 100
+                self.logger.info(f"   当前价格: ${price:.4f}")
+                self.logger.info(f"   MA120: ${ma120:.4f}")
+                self.logger.info(f"   偏离度: {deviation:.1f}%")
+            else:
+                self.logger.error(f"❌ 获取 {symbol} 市场数据失败")
+        
+        # 执行每个币种的策略
+        for symbol in self.strategy.symbols:
+            if symbol not in current_prices:
+                continue
+                
+            self.logger.info(f"\n🎯 执行 {symbol} 策略...")
+            
+            # 1. 检查减仓条件
+            profit_result = self.strategy.execute_profit_taking(symbol, current_prices[symbol], current_date)
+            if profit_result['action'] == 'sell':
+                self.logger.info(f"   🎯 触发减仓条件!")
+                self.logger.info(f"   卖出份额: {profit_result['size']:.4f}")
+                
+                order = self.execute_sell_order(
+                    symbol, 
+                    profit_result['size'], 
+                    profit_result['price']
+                )
+                if order:
+                    self.logger.info("   ✅ 减仓操作完成")
+            else:
+                self.logger.info(f"   ⏳ 减仓检查: {profit_result['reason']}")
+            
+            # 2. 检查投资条件
+            if self.strategy.should_invest_today(current_date, symbol):
+                available_cash = self.get_account_balance()
+                investment_result = self.strategy.execute_investment(
+                    symbol, current_prices[symbol], ma120_values[symbol], current_date, available_cash
                 )
                 
-                if order:
-                    self.logger.info(f"✅ 第{self.strategy.investment_count}期投资完成")
+                if investment_result['action'] == 'buy':
+                    self.logger.info(f"   🎯 触发投资条件!")
+                    self.logger.info(f"   投资金额: ${investment_result['amount']:.2f}")
+                    self.logger.info(f"   偏离程度: {investment_result['deviation']:.1f}%")
+                    
+                    order = self.execute_buy_order(
+                        symbol,
+                        investment_result['size'],
+                        investment_result['price']
+                    )
+                    
+                    if order:
+                        state = self.strategy.symbol_states[symbol]
+                        self.logger.info(f"   ✅ 第{state['investment_count']}期投资完成")
+                else:
+                    self.logger.info(f"   ⏳ 投资检查: {investment_result['reason']}")
             else:
-                self.logger.info(f"⏳ 投资检查: {investment_result['reason']}")
-        else:
-            if self.strategy.last_investment_date:
-                days_since_last = (current_date - self.strategy.last_investment_date).days
-                days_remaining = self.strategy.investment_interval - days_since_last
-                self.logger.info(f"📅 非投资日，还需等待 {days_remaining} 天")
+                state = self.strategy.symbol_states[symbol]
+                if state['last_investment_date']:
+                    days_since_last = (current_date - state['last_investment_date']).days
+                    days_remaining = self.strategy.investment_interval - days_since_last
+                    self.logger.info(f"   📅 非投资日，还需等待 {days_remaining} 天")
         
         # 3. 打印投资组合状态
-        self.print_portfolio_status(current_price)
+        self.print_multi_portfolio_status(current_prices)
         
         # 4. 保存状态
         self.save_strategy_state()
         
-        self.logger.info("✅ 策略检查完成\n")
+        self.logger.info("✅ 多币种策略检查完成\n")
     
-    def print_portfolio_status(self, current_price):
-        """打印投资组合状态"""
-        current_value = self.strategy.total_shares * current_price
+    def print_multi_portfolio_status(self, current_prices):
+        """打印多币种投资组合状态"""
+        self.logger.info("\n📊 多币种投资组合详细报告")
+        self.logger.info("=" * 50)
         
-        if self.strategy.total_invested > 0:
-            current_return = (current_value - self.strategy.total_invested) / self.strategy.total_invested * 100
-        else:
-            current_return = 0
+        total_assets = 0
+        total_investment = 0
         
-        total_assets = current_value + self.strategy.total_sell_amount
-        total_investment = sum([inv['amount'] for inv in self.strategy.investment_history])
+        for symbol in self.strategy.symbols:
+            if symbol not in current_prices:
+                continue
+                
+            status = self.strategy.get_portfolio_status(symbol, current_prices[symbol])
+            
+            self.logger.info(f"\n{symbol}:")
+            self.logger.info(f"   定投期数: {status['investment_count']} 期")
+            self.logger.info(f"   持仓数量: {status['total_shares']:.4f}")
+            self.logger.info(f"   持仓成本: ${status['total_invested']:.2f}")
+            self.logger.info(f"   当前价值: ${status['current_value']:.2f}")
+            self.logger.info(f"   浮动收益: {status['current_return']:.1f}%")
+            self.logger.info(f"   累计投资: ${status['total_investment']:.2f}")
+            self.logger.info(f"   累计卖出: ${status['total_sell_amount']:.2f}")
+            self.logger.info(f"   总资产: ${status['total_assets']:.2f}")
+            self.logger.info(f"   总收益率: {status['total_return']:.1f}%")
+            
+            total_assets += status['total_assets']
+            total_investment += status['total_investment']
         
+        # 总投资组合汇总
+        self.logger.info("\n💰 总投资组合汇总:")
+        self.logger.info(f"   累计总投资: ${total_investment:.2f}")
+        self.logger.info(f"   总资产价值: ${total_assets:.2f}")
         if total_investment > 0:
             total_return = ((total_assets - total_investment) / total_investment) * 100
-        else:
-            total_return = 0
+            self.logger.info(f"   总投资收益率: {total_return:.1f}%")
         
-        self.logger.info("📊 投资组合详细报告")
-        self.logger.info(f"   定投期数: {self.strategy.investment_count} 期")
-        self.logger.info(f"   持仓数量: {self.strategy.total_shares:.4f}")
-        self.logger.info(f"   持仓成本: ${self.strategy.total_invested:.2f}")
-        self.logger.info(f"   当前价值: ${current_value:.2f}")
-        self.logger.info(f"   浮动收益: {current_return:.1f}%")
-        self.logger.info(f"   累计投资: ${total_investment:.2f}")
-        self.logger.info(f"   累计卖出: ${self.strategy.total_sell_amount:.2f}")
-        self.logger.info(f"   总资产: ${total_assets:.2f}")
-        self.logger.info(f"   总收益率: {total_return:.1f}%")
-        
-        if self.strategy.last_investment_date:
-            self.logger.info(f"   最后投资: {self.strategy.last_investment_date}")
-    
     def health_check(self):
-        """系统健康检查"""
+        """系统健康检查 - 支持真实API的Dry Run模式"""
         try:
+            # 测试连接和API密钥有效性
             self.exchange.fetch_time()
-            price = self.get_current_price()
-            if price:
-                self.logger.info("🟢 健康检查通过")
-                return True
+            
+            # 测试获取余额（验证API密钥权限）
+            if os.getenv('DRY_RUN', 'true').lower() == 'true':
+                self.logger.info("💡 Dry Run模式 - 测试API连接")
+                # Dry Run模式下只测试连接，不进行完整余额检查
+                price = self.get_current_price()
+                if price:
+                    self.logger.info("🟢 健康检查通过 - API连接正常")
+                    return True
+                else:
+                    return False
             else:
-                return False
+                # 真实交易模式进行完整检查
+                price = self.get_current_price()
+                balance = self.get_account_balance()
+                if price and balance is not None:
+                    self.logger.info("🟢 健康检查通过")
+                    return True
+                else:
+                    return False
+                    
+        except ccxt.AuthenticationError as e:
+            self.logger.error(f"🔴 API密钥验证失败: {e}")
+            return False
+        except ccxt.PermissionDenied as e:
+            self.logger.error(f"🔴 API权限不足: {e}")
+            return False
         except Exception as e:
             self.logger.error(f"🔴 健康检查失败: {e}")
             return False
-    
     def run(self):
         """主运行循环"""
-        self.logger.info("🚀 DFA动态定投实盘系统启动 - 阿里云部署")
+        self.logger.info("🚀 DFA动态定投实盘系统启动 - 本地代理测试")
         
         dry_run = os.getenv('DRY_RUN', 'true').lower() == 'true'
         if dry_run:
-            self.logger.info("💡 当前模式: 模拟交易（不会真实下单）")
+            self.logger.info("💡 当前模式: 模拟交易")
         else:
-            self.logger.info("🚨 当前模式: 真实交易（会真实下单！）")
+            self.logger.info("🚨 当前模式: 真实交易")
         
         if not self.health_check():
             self.logger.error("❌ 系统健康检查失败，无法启动")

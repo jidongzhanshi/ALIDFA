@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  dfa-trader:
+    build: .
+    container_name: dfa-trader
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - TZ=Asia/Shanghai
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import requests; requests.get('https://api.binance.com/api/v3/time', timeout=10)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
